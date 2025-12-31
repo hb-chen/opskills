@@ -1,0 +1,42 @@
+{
+  "name": "kubekey",
+  "displayName": "KubeKey - Kubernetes Cluster Management",
+  "description": "Manage Kubernetes clusters with KubeKey: check installation, install KubeKey, create clusters, scale nodes, upgrade clusters, and view configurations.",
+  "version": "1.0.0",
+  "author": "hb-chen",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/hb-chen/opskills"
+  },
+  "keywords": [
+    "kubernetes",
+    "k8s",
+    "kubekey",
+    "cluster",
+    "devops",
+    "infrastructure",
+    "deployment"
+  ],
+  "categories": [
+    "devops",
+    "infrastructure"
+  ],
+  "requirements": {
+    "os": ["linux", "darwin"],
+    "tools": ["curl", "tar"]
+  },
+  "installation": {
+    "instructions": "Copy the kubekey skill folder to your skills directory:\n- For Claude Code: ~/.claude/skills/ or .claude/skills/\n- For OpenAI Codex CLI: ~/.codex/skills/"
+  },
+  "examples": [
+    "Check if KubeKey is installed",
+    "Install KubeKey version 3.0.0",
+    "Create a Kubernetes cluster from configuration file",
+    "Scale a cluster by adding worker nodes",
+    "Upgrade Kubernetes cluster to v1.28.0",
+    "Upgrade Kubernetes and KubeSphere together",
+    "View and analyze cluster configuration"
+  ]
+}
+
