@@ -256,6 +256,15 @@ Before creating a cluster, verify:
 - [ ] Node roles are correctly assigned
 - [ ] Sufficient resources on nodes (CPU, memory, disk)
 
+## References
+
+- [KubeKey Documentation](https://kubesphere.io/docs/installing-on-linux/introduction/kubekey/)
+- [Kubernetes Networking](https://kubernetes.io/docs/concepts/cluster-administration/networking/)
+- [Calico Network Policies](https://docs.tigera.io/calico/latest/network-policy/)
+- [Cilium Documentation](https://docs.cilium.io/)
+- [Containerd Configuration](https://containerd.io/docs/)
+- [Kubernetes Cluster Networking](https://kubernetes.io/docs/concepts/cluster-administration/networking/)
+
 ## Example Configurations
 
 ### Minimal Development Cluster

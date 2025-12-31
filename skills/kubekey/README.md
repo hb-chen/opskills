@@ -52,7 +52,7 @@ This will prompt you for:
 
 **Manual Creation:**
 1. Review the example: `examples/cluster-config.yaml`
-2. See detailed options: `examples/config-options.md`
+2. See detailed options: `references/config-options.md`
 3. Create your configuration file
 
 ### Create a Cluster
@@ -160,7 +160,7 @@ Cluster configurations are defined in YAML files. The AI agent can help you gene
 ### Configuration Files
 
 - `examples/cluster-config.yaml` - Complete example configuration
-- `examples/config-options.md` - Detailed reference for all options
+- `references/config-options.md` - Detailed reference for all options
 - `scripts/generate_config.sh` - Interactive configuration generator
 
 ### Configuration Sections
@@ -194,9 +194,55 @@ All scripts are located in the `scripts/` directory:
 
 ## Resources
 
-- [KubeKey GitHub](https://github.com/kubesphere/kubekey)
-- [KubeKey Documentation](https://kubesphere.io/docs/installing-on-linux/introduction/kubekey/)
+### KubeKey
+
+- [KubeKey GitHub Repository](https://github.com/kubesphere/kubekey)
+- [KubeKey Official Documentation](https://kubesphere.io/docs/installing-on-linux/introduction/kubekey/)
+- [KubeKey Releases](https://github.com/kubesphere/kubekey/releases)
+- [KubeKey Upgrade Guide](https://kubesphere.io/docs/upgrade/upgrade-with-kubekey/)
+
+### Kubernetes
+
+- [Kubernetes Official Documentation](https://kubernetes.io/docs/)
+- [Kubernetes Installation Guide](https://kubernetes.io/docs/setup/)
+- [Kubernetes Version Support](https://kubernetes.io/releases/)
+- [Kubernetes Networking](https://kubernetes.io/docs/concepts/cluster-administration/networking/)
+
+### CNI Plugins
+
+- [Calico Documentation](https://docs.tigera.io/calico/)
+- [Flannel Documentation](https://github.com/flannel-io/flannel)
+- [Cilium Documentation](https://docs.cilium.io/)
+- [Kube-OVN Documentation](https://kubeovn.github.io/kubeovn/)
+- [Weave Net Documentation](https://www.weave.works/docs/net/latest/)
+
+### Container Runtimes
+
+- [Containerd Documentation](https://containerd.io/docs/)
+- [Docker Documentation](https://docs.docker.com/)
+- [CRI-O Documentation](https://cri-o.io/)
+- [Container Runtime Interface (CRI)](https://kubernetes.io/docs/concepts/architecture/cri/)
+
+### KubeSphere
+
+- [KubeSphere Official Website](https://kubesphere.io/)
+- [KubeSphere Documentation](https://kubesphere.io/docs/)
+- [KubeSphere Installation](https://kubesphere.io/docs/installing-on-linux/)
+- [KubeSphere Community](https://kubesphere.io/community/)
+
+### Agent Skills
+
 - [Agent Skills Specification](https://agentskills.io/)
+- [Agent Skills GitHub](https://github.com/anthropics/skills)
+- [SkillsMP Marketplace](https://skillsmp.com/)
+- [Agent Skills Examples](https://github.com/anthropics/skills/tree/main/examples)
+
+### Community & Support
+
+- [KubeKey Issues](https://github.com/kubesphere/kubekey/issues)
+- [KubeKey Discussions](https://github.com/kubesphere/kubekey/discussions)
+- [Kubernetes Community](https://kubernetes.io/community/)
+- [KubeSphere Community](https://kubesphere.io/community/)
 
 ## License
 

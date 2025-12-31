@@ -44,9 +44,24 @@ To publish skills to [SkillsMP](https://skillsmp.com/):
 
 ## Resources
 
+### Agent Skills
+
 - [Agent Skills Specification](https://agentskills.io/)
+- [Agent Skills Specification (GitHub)](https://github.com/anthropics/skills)
 - [SkillsMP Marketplace](https://skillsmp.com/)
-- [Agent Skills on GitHub](https://github.com/anthropics/skills)
+- [Agent Skills Examples](https://github.com/anthropics/skills/tree/main/examples)
+
+### Skill Development
+
+- [Creating Agent Skills](https://agentskills.io/specification)
+- [SKILL.md Format](https://agentskills.io/specification)
+- [Publishing Skills](https://skillsmp.com/)
+
+### Related Tools
+
+- [Claude Code](https://claude.ai/code)
+- [OpenAI Codex CLI](https://openai.com/)
+- [Cursor IDE](https://cursor.sh/)
 
 ## License
 

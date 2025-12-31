@@ -1,3 +1,10 @@
+---
+name: kubekey
+description: "Manage Kubernetes clusters with KubeKey: check installation, install KubeKey, create clusters, scale nodes, upgrade clusters, and view configurations. Use when working with Kubernetes cluster deployment, management, or when the user mentions KubeKey, kk, or Kubernetes cluster operations."
+license: MIT
+compatibility: "Requires Linux or macOS, SSH access to nodes, and network connectivity. KubeKey tool (kk) should be installed or will be installed by the skill."
+---
+
 # KubeKey Skill
 
 ## Description
@@ -437,7 +444,7 @@ KubeKey supports upgrading Kubernetes clusters and optionally KubeSphere. Follow
 ## Configuration Reference
 
 For detailed information about all configuration options, see:
-- `examples/config-options.md` - Complete reference of all configuration options
+- `references/config-options.md` - Complete reference of all configuration options
 - `examples/cluster-config.yaml` - Example configuration file
 - `scripts/generate_config.sh` - Interactive configuration generator
 
@@ -450,8 +457,14 @@ Key configuration decisions:
 
 ## References
 
+For detailed technical references, see:
+- [KubeKey Reference Guide](references/reference.md) - Comprehensive links to KubeKey, Kubernetes, CNI plugins, and related documentation
+- [KubeKey Commands Reference](references/commands.md) - Quick reference for all kk commands
+- [Configuration Options](references/config-options.md) - Detailed configuration options reference
+- [Example Configuration](examples/cluster-config.yaml) - Sample cluster configuration file
+
+Key resources:
 - KubeKey GitHub: https://github.com/kubesphere/kubekey
 - KubeKey Documentation: https://kubesphere.io/docs/installing-on-linux/introduction/kubekey/
-- Example configurations in `examples/` directory
-- Configuration options reference: `examples/config-options.md`
+- Kubernetes Documentation: https://kubernetes.io/docs/
 
