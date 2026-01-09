@@ -176,7 +176,18 @@ func runHTTP(ctx context.Context, httpAddr, grpcAddr string, pipeline *agent.Pip
 		Handler: finalHandler,
 	}
 
-	logger.Infof("HTTP server listening on %s", httpAddr)
+	// Start listening to get the actual address
+	listener, err := net.Listen("tcp", httpAddr)
+	if err != nil {
+		return fmt.Errorf("failed to listen on %s: %w", httpAddr, err)
+	}
+
+	// Get the actual address (in case port was 0, which assigns a random port)
+	actualAddr := listener.Addr().String()
+	httpURL := formatHTTPURL(actualAddr)
+
+	logger.Infof("HTTP server listening on %s", actualAddr)
+	logger.Infof("HTTP access URL: %s", httpURL)
 
 	go func() {
 		<-ctx.Done()
@@ -184,11 +195,29 @@ func runHTTP(ctx context.Context, httpAddr, grpcAddr string, pipeline *agent.Pip
 		_ = srv.Shutdown(ctx)
 	}()
 
-	if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+	// Start serving
+	if err := srv.Serve(listener); err != nil && err != http.ErrServerClosed {
 		return fmt.Errorf("HTTP server failed: %w", err)
 	}
 
 	return nil
+}
+
+// formatHTTPURL formats the address into a complete HTTP URL
+func formatHTTPURL(addr string) string {
+	host, port, err := net.SplitHostPort(addr)
+	if err != nil {
+		// If parsing fails, assume it's just a port
+		logger.Warnf("Failed to parse address %s: %v, assuming it's just a port", addr, err)
+		return fmt.Sprintf("http://localhost%s", addr)
+	}
+
+	// Handle empty host (means all interfaces)
+	if host == "" || host == "0.0.0.0" || host == "[::]" {
+		host = "localhost"
+	}
+
+	return fmt.Sprintf("http://%s:%s", host, port)
 }
 
 // httpErrorHandler handles errors from grpc-gateway
