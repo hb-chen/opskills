@@ -1,0 +1,27 @@
+# MCP Servers configuration
+# This file defines external MCP servers that can be connected to
+
+mcp_servers:
+  # Example: Local KubeKey MCP Server (stdio)
+  kubekey-mcp-server:
+    type: stdio
+    command: ./bin/kubekey-mcp-server
+    args:
+      - --skills-dir
+      - ./skills
+    env:
+      # Environment variables for the server process
+      # SKILLS_DIR: ./skills
+
+  # Example: HTTP-based MCP Server (future)
+  # remote-mcp-server:
+  #   type: http
+  #   url: http://localhost:8080/mcp
+
+  # Example: SSE-based MCP Server (future)
+  # streaming-mcp-server:
+  #   type: sse
+  #   url: http://localhost:8080/mcp/sse
+
+
+

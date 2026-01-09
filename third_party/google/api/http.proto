@@ -1,0 +1,350 @@
+// Copyright 2015 Google LLC
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+syntax = "proto3";
+
+package google.api;
+
+option go_package = "google.golang.org/genproto/googleapis/api/http;http";
+
+// Defines the HTTP configuration for an API service. It contains a list of
+// [HttpRule][google.api.HttpRule], each specifying the mapping of an RPC method
+// to one or more HTTP REST API methods.
+message Http {
+  // A list of HTTP configuration rules that apply to individual API methods.
+  //
+  // **NOTE:** All service configuration rules follow "last one wins" order.
+  repeated HttpRule rules = 1;
+
+  // When set to true, URL path parameters will be fully URI-decoded except in
+  // cases of single segment matches in reserved expansion, where "%2F" will be
+  // left encoded.
+  //
+  // The default behavior is to not decode RFC 6570 reserved characters in multi
+  // segment matches.
+  bool fully_decode_reserved_expansion = 2;
+}
+
+// # gRPC Transcoding
+//
+// gRPC Transcoding is a feature for mapping between a gRPC method and one or
+// more HTTP REST endpoints. It allows developers to build a single API service
+// that supports both gRPC APIs and REST APIs. Many systems, including [Google
+// APIs](https://github.com/googleapis/googleapis),
+// [Cloud Endpoints](https://cloud.google.com/endpoints), [gRPC
+// Gateway](https://github.com/grpc-ecosystem/grpc-gateway),
+// and [Envoy proxy](https://github.com/envoyproxy/envoy) support this feature
+// and use it for large scale production services.
+//
+// `HttpRule` defines the schema of the gRPC/REST mapping. The mapping specifies
+// how different portions of the gRPC request message are mapped to the URL
+// path, URL query parameters, and HTTP request body. It also controls how the
+// gRPC response message is mapped to the HTTP response body. `HttpRule` is
+// typically specified as an `google.api.http` annotation on the gRPC method.
+//
+// See the examples below for details on how to map between gRPC and HTTP.
+//
+// ## Mapping gRPC to HTTP/REST
+//
+// The following rules are applied when mapping between gRPC and HTTP:
+//
+// 1. Path template can reference one or more fields in the gRPC request message,
+//    as long as each field is a non-repeated field with a primitive (non-message)
+//    type. See the example below.
+// 2. Fields that are not referenced in the path template automatically become
+//    HTTP query parameters if there is no HTTP request body. For example:
+//
+//     service Messaging {
+//       rpc GetMessage(GetMessageRequest) returns (Message) {
+//         option (google.api.http) = {
+//             get: "/v1/messages/{message_id}"
+//         };
+//       }
+//     }
+//
+//     message GetMessageRequest {
+//       message SubMessage {
+//         string subfield = 1;
+//       }
+//       string message_id = 1; // mapped to the URL
+//       int64 revision = 2;    // becomes a query parameter `revision`
+//       SubMessage sub = 3;     // `sub.subfield` becomes a query parameter `sub.subfield`
+//     }
+//
+// 3. If the HTTP request body is specified with `*`, the following fields in
+//    the gRPC request message are automatically populated unless specified
+//    otherwise:
+//
+//     - Fields in the path template
+//     - Fields that are HTTP headers (have the `google.api.http.header`
+//       annotation)
+//     - Fields in the query string (have the `google.api.http.query`
+//       annotation)
+//
+//    All other fields are sent as HTTP request body.
+//
+// 4. If the HTTP request body is specified with a field mask, then fields
+//    specified in the field mask are sent as HTTP request body and all other
+//    fields are sent as query parameters. See the example below.
+//
+// 5. If the HTTP request body is `body: "none"`, then all fields are sent as
+//    query parameters.
+//
+// ## Path template syntax
+//
+//     Template = "/" Segments [ Verb ] ;
+//     Segments = Segment { "/" Segment } ;
+//     Segment  = "*" | "**" | LITERAL | Variable ;
+//     Variable = "{" FieldPath [ "=" Segments ] "}" ;
+//     FieldPath = IDENT { "." IDENT } ;
+//     Segments  = LITERAL | Variable ;
+//     Verb      = ":" LITERAL ;
+//
+//     The syntax `*` matches a single URL path segment. The syntax `**` matches
+//     zero or more URL path segments, which must be the last part of the URL path
+//     except the `Verb`.
+//
+//     The syntax `Variable` matches part of the URL path as specified by its
+//     template. A variable template must not contain other variables. If a variable
+//     matches a single path segment, its template may be omitted, e.g. `{var}`
+//     is equivalent to `{var=*}`.
+//
+//     The syntax `LITERAL` matches literal text in the URL path.
+//
+// ## Examples
+//
+//     // Trivial example.
+//     service Messaging {
+//       rpc GetMessage(GetMessageRequest) returns (Message) {
+//         option (google.api.http) = {
+//             get: "/v1/messages/{message_id}"
+//         };
+//       }
+//     }
+//     message GetMessageRequest {
+//       string message_id = 1; // mapped to the URL path
+//     }
+//
+//     // This enables an HTTP REST API to be defined on top of a gRPC API. The
+//     // REST API will have the following methods:
+//     //
+//     // GET /v1/messages/{message_id}  -> GetMessage(message_id)
+//     //
+//     // This enables the following two alternative HTTP JSON/REST
+//     // implementations:
+//     //
+//     // 1. HTTP JSON mapping using field name as the key
+//     //    So, an HTTP such as:
+//     //        GET /v1/messages/123456
+//     //    Will result in a call to:
+//     //        GetMessage(message_id: "123456")
+//     //
+//     // 2. HTTP JSON mapping using proto field name as the key
+//     //    So, an HTTP such as:
+//     //        GET /v1/messages/123456
+//     //    Will result in a call to:
+//     //        GetMessage(message_id: "123456")
+//
+//     // This enables HTTP REST API with additional bindings:
+//     service Messaging {
+//       rpc GetMessage(GetMessageRequest) returns (Message) {
+//         option (google.api.http) = {
+//             get: "/v1/messages/{message_id}"
+//             additional_bindings {
+//                 get: "/v1/users/{user_id}/messages/{message_id}"
+//             }
+//         };
+//       }
+//     }
+//     message GetMessageRequest {
+//       string message_id = 1;
+//       string user_id = 2;
+//     }
+//
+//     // This enables the following REST API:
+//     //
+//     // GET /v1/messages/{message_id}         -> GetMessage(message_id)
+//     // GET /v1/users/{user_id}/messages/{message_id} -> GetMessage(user_id, message_id)
+//
+//     // This enables HTTP REST API with streaming response:
+//     service Messaging {
+//       rpc ListMessages(ListMessagesRequest) returns (stream Message) {
+//         option (google.api.http) = {
+//             get: "/v1/messages"
+//         };
+//       }
+//     }
+//     message ListMessagesRequest {
+//       string parent = 1;
+//     }
+//
+//     // This enables the following REST API:
+//     //
+//     // GET /v1/messages -> ListMessages(parent: "")
+//
+//     // This enables HTTP REST API with custom verb:
+//     service Messaging {
+//       rpc SearchMessages(SearchMessagesRequest) returns (SearchMessagesResponse) {
+//         option (google.api.http) = {
+//             get: "/v1/messages:search"
+//         };
+//       }
+//     }
+//     message SearchMessagesRequest {
+//       string query = 1;
+//     }
+//
+//     // This enables the following REST API:
+//     //
+//     // GET /v1/messages:search?query=hello -> SearchMessages(query: "hello")
+//
+//     // This enables HTTP REST API with body mapping:
+//     service Messaging {
+//       rpc UpdateMessage(UpdateMessageRequest) returns (Message) {
+//         option (google.api.http) = {
+//             patch: "/v1/messages/{message_id}"
+//             body: "message"
+//         };
+//       }
+//     }
+//     message UpdateMessageRequest {
+//       string message_id = 1; // mapped to the URL
+//       Message message = 2;   // mapped to the body
+//     }
+//
+//     // This enables the following REST API:
+//     //
+//     // PATCH /v1/messages/{message_id}
+//     // Body: { "text": "Hi!" }
+//     // -> UpdateMessage(message_id: "123", message: Message{text: "Hi!"})
+//
+//     // This enables HTTP REST API with body mapping using field mask:
+//     service Messaging {
+//       rpc UpdateMessage(UpdateMessageRequest) returns (Message) {
+//         option (google.api.http) = {
+//             patch: "/v1/messages/{message_id}"
+//             body: "*"
+//         };
+//       }
+//     }
+//     message UpdateMessageRequest {
+//       string message_id = 1; // mapped to the URL
+//       FieldMask update_mask = 2; // mapped to the query string
+//       Message message = 3;   // mapped to the body
+//     }
+//
+//     // This enables the following REST API:
+//     //
+//     // PATCH /v1/messages/{message_id}?update_mask=text
+//     // Body: { "text": "Hi!" }
+//     // -> UpdateMessage(message_id: "123", update_mask: FieldMask{paths: ["text"]}, message: Message{text: "Hi!"})
+//
+//     // This enables HTTP REST API with body mapping using field mask and
+//     // additional bindings:
+//     service Messaging {
+//       rpc UpdateMessage(UpdateMessageRequest) returns (Message) {
+//         option (google.api.http) = {
+//             patch: "/v1/messages/{message_id}"
+//             body: "*"
+//             additional_bindings {
+//                 patch: "/v1/users/{user_id}/messages/{message_id}"
+//                 body: "*"
+//             }
+//         };
+//       }
+//     }
+//     message UpdateMessageRequest {
+//       string message_id = 1; // mapped to the URL
+//       string user_id = 2;    // mapped to the URL
+//       FieldMask update_mask = 3; // mapped to the query string
+//       Message message = 4;   // mapped to the body
+//     }
+//
+//     // This enables the following REST API:
+//     //
+//     // PATCH /v1/messages/{message_id}?update_mask=text
+//     // Body: { "text": "Hi!" }
+//     // -> UpdateMessage(message_id: "123", update_mask: FieldMask{paths: ["text"]}, message: Message{text: "Hi!"})
+//     //
+//     // PATCH /v1/users/{user_id}/messages/{message_id}?update_mask=text
+//     // Body: { "text": "Hi!" }
+//     // -> UpdateMessage(user_id: "456", message_id: "123", update_mask: FieldMask{paths: ["text"]}, message: Message{text: "Hi!"})
+message HttpRule {
+  // Selects a method to which this rule applies.
+  //
+  // Refer to [selector][google.api.DocumentationRule.selector] for syntax details.
+  //
+  // Methods are restricted to those defined within the service definition.
+  // If no methods are specified, the rule applies to all methods defined
+  // within the service.
+  string selector = 1;
+
+  // Determines the URL pattern is matched by this rules. This pattern can be
+  // used with any of the {get|put|post|delete|patch} methods. A custom method
+  // can be defined using the 'custom' field.
+  oneof pattern {
+    // Maps to HTTP GET. Used for listing and getting information about
+    // resources.
+    string get = 2;
+
+    // Maps to HTTP PUT. Used for replacing a resource.
+    string put = 3;
+
+    // Maps to HTTP POST. Used for creating a resource or performing an action.
+    string post = 4;
+
+    // Maps to HTTP DELETE. Used for deleting a resource.
+    string delete = 5;
+
+    // Maps to HTTP PATCH. Used for updating a resource.
+    string patch = 6;
+
+    // The custom pattern is used for specifying an HTTP method that is not
+    // included in the `pattern` field, such as HEAD, or "*" to leave the
+    // HTTP method unspecified for this rule. The wild-card rule is useful
+    // for services that provide content to Web (HTML) clients.
+    CustomHttpPattern custom = 8;
+  }
+
+  // The name of the request field whose value is mapped to the HTTP request
+  // body, or `*` for mapping all request fields not captured by the path
+  // pattern to the HTTP body, or omitted for not having any HTTP request body.
+  //
+  // NOTE: the referred field must be present at the top-level of the request
+  // message type.
+  string body = 7;
+
+  // Optional. The name of the response field whose value is mapped to the HTTP
+  // response body. When omitted, the entire response message will be used
+  // as the HTTP response body.
+  //
+  // NOTE: The referred field must be present at the top-level of the response
+  // message type.
+  string response_body = 12;
+
+  // Additional HTTP bindings for the selector. Nested bindings must not
+  // specify an `additional_bindings` field themselves (that is, the nesting
+  // may only be one level deep).
+  repeated HttpRule additional_bindings = 11;
+}
+
+// A custom pattern is used for defining custom HTTP verb.
+message CustomHttpPattern {
+  // The name of this custom HTTP verb.
+  string kind = 1;
+
+  // The path matched by this custom verb.
+  string path = 2;
+}
+

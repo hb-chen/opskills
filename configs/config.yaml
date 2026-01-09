@@ -1,0 +1,20 @@
+server:
+  http:
+    addr: ":8080"
+  grpc:
+    addr: ":8081"
+
+log:
+  level: "INFO"
+  path: "./log"
+  debug: false
+
+llm:
+  provider: "openai"
+  api_key: ""  # Set via OPENAI_API_KEY env var
+  model: "gpt-4"
+  url: ""  # Custom LLM service URL (e.g., http://localhost:8000/v1), empty for default OpenAI API
+
+skills:
+  dir: "./skills"
+

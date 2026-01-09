@@ -1,0 +1,86 @@
+syntax = "proto3";
+
+package opskills.ops;
+
+import "google/api/annotations.proto";
+import "proto/common/common.proto";
+
+option go_package = "github.com/hb-chen/opskills/proto/ops;ops";
+
+// OpsService provides operations for intelligent Ops tasks
+service OpsService {
+  // SubmitTask submits a new Ops task
+  rpc SubmitTask(SubmitTaskRequest) returns (opskills.common.Response) {
+    option (google.api.http) = {
+      post: "/api/v1/tasks"
+      body: "*"
+    };
+  }
+
+  // GetTaskStatus gets the status of a task
+  rpc GetTaskStatus(GetTaskStatusRequest) returns (opskills.common.Response) {
+    option (google.api.http) = {
+      get: "/api/v1/tasks/{task_id}"
+    };
+  }
+
+  // ListTasks lists all tasks
+  rpc ListTasks(ListTasksRequest) returns (opskills.common.Response) {
+    option (google.api.http) = {
+      get: "/api/v1/tasks"
+    };
+  }
+
+  // CancelTask cancels a running task
+  rpc CancelTask(CancelTaskRequest) returns (opskills.common.Response) {
+    option (google.api.http) = {
+      post: "/api/v1/tasks/{task_id}/cancel"
+      body: "*"
+    };
+  }
+}
+
+// SubmitTaskRequest represents a request to submit a task
+message SubmitTaskRequest {
+  string query = 1;  // User query/request
+  map<string, string> params = 2;  // Additional parameters
+}
+
+// GetTaskStatusRequest represents a request to get task status
+message GetTaskStatusRequest {
+  string task_id = 1;
+}
+
+// ListTasksRequest represents a request to list tasks
+message ListTasksRequest {
+  int32 page = 1;
+  int32 page_size = 2;
+  string status = 3;  // Filter by status: pending, running, completed, failed
+}
+
+// CancelTaskRequest represents a request to cancel a task
+message CancelTaskRequest {
+  string task_id = 1;
+}
+
+// Task represents a task
+message Task {
+  string task_id = 1;
+  string query = 2;
+  string status = 3;
+  string plan = 4;
+  repeated StepResult results = 5;
+  string error = 6;
+  string created_at = 7;
+  string updated_at = 8;
+}
+
+// StepResult represents the result of a step
+message StepResult {
+  int32 step_id = 1;
+  string skill_name = 2;
+  bool success = 3;
+  string output = 4;
+  string error = 5;
+}
+

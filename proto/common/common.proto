@@ -1,0 +1,18 @@
+syntax = "proto3";
+
+package opskills.common;
+
+import "google/protobuf/any.proto";
+
+option go_package = "github.com/hb-chen/opskills/proto/common;common";
+
+// Response represents a common API response
+message Response {
+  int32 code = 1;
+  string message = 2;
+  google.protobuf.Any data = 3;
+}
+
+// Empty represents an empty message
+message Empty {}
+
