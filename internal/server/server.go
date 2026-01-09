@@ -212,8 +212,10 @@ func formatHTTPURL(addr string) string {
 		return fmt.Sprintf("http://localhost%s", addr)
 	}
 
-	// Handle empty host (means all interfaces)
-	if host == "" || host == "0.0.0.0" || host == "[::]" {
+	// Handle empty host or all interfaces (IPv4 and IPv6)
+	// 0.0.0.0 (IPv4 all interfaces) and any host with only colons (IPv6 unspecified address like ::)
+	// all mean listen on all interfaces, so we use localhost for the URL
+	if host == "0.0.0.0" || strings.Trim(host, ":") == "" {
 		host = "localhost"
 	}
 
