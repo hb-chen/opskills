@@ -25,7 +25,7 @@ type SkillConfig struct {
 
 // Config represents the skills configuration
 type Config struct {
-	Skills map[string]SkillConfig `yaml:"skills"`
+	Skills     map[string]SkillConfig     `yaml:"skills"`
 	MCPServers map[string]MCPServerConfig `yaml:"mcp_servers,omitempty"`
 }
 
@@ -62,10 +62,7 @@ func (c *Config) GetSkillConfig(skillName string) (SkillConfig, bool) {
 // GetDefaultConfig returns a default configuration
 func GetDefaultConfig() *Config {
 	return &Config{
-		Skills: make(map[string]SkillConfig),
+		Skills:     make(map[string]SkillConfig),
 		MCPServers: make(map[string]MCPServerConfig),
 	}
 }
-
-
-

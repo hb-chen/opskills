@@ -129,6 +129,3 @@ func (m *ExternalServerManager) Close() error {
 
 	return lastErr
 }
-
-
-

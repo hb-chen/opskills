@@ -1,0 +1,177 @@
+# OpsSkills Agent - Architecture Rules
+
+## Core Architecture Principles
+
+### 1. Proto-First Approach
+**All standard interfaces MUST be defined in Protocol Buffers first, then implemented as gRPC services, and automatically exposed via grpc-gateway.**
+
+- **Standard Flow**: `proto definition` → `gRPC service implementation` → `grpc-gateway automatic HTTP exposure`
+- **Benefits**: 
+  - Single source of truth for API contracts
+  - Automatic HTTP/gRPC dual support
+  - Type safety and code generation
+  - API documentation via OpenAPI/Swagger
+
+### 2. Special Routes Exception
+**Only routes that CANNOT be implemented via gRPC/gateway should use special HTTP handlers.**
+
+Examples of special routes:
+- **SSE (Server-Sent Events)**: `/api/run` - requires streaming HTTP response with `Flusher`
+- **WebSocket**: Real-time bidirectional communication
+- **File Upload/Download**: Large file handling with progress
+- **Health Check**: Simple endpoint that doesn't need gRPC overhead
+
+**Rule**: If a route can be implemented via proto → gRPC → gateway, it MUST NOT be implemented as a special route.
+
+### 3. No Duplicate Route Registration
+**Never manually register routes that are already defined in proto files.**
+
+- Proto-defined routes are automatically registered by grpc-gateway
+- Manual registration creates conflicts and violates the single source of truth principle
+- If you need to change a route, modify the proto file and regenerate code
+
+### 4. Avoid Adapters, Prefer Independent Packages
+**When facing circular dependencies or interface mismatches, create independent packages instead of adapters.**
+
+- **Principle**: Create shared packages (e.g., `internal/tracer`, `internal/types`) for interfaces and types used by multiple packages
+- **Benefits**:
+  - Eliminates circular dependencies
+  - Removes need for adapter/wrapper code
+  - Keeps code clean and maintainable
+  - Single source of truth for shared interfaces
+
+**Rule**: 
+- ❌ **Don't create adapters** to bridge interface mismatches between packages
+- ✅ **Do create independent packages** for shared interfaces/types
+- ✅ **Do use the shared package directly** in all consuming packages
+
+**Example**:
+```go
+// ❌ WRONG - Using adapter to bridge interfaces
+type graphTracerAdapter struct {
+    tracer agent.ExecutionTracer
+}
+// ... adapter methods ...
+
+// ✅ CORRECT - Independent package with shared interface
+// internal/tracer/tracer.go
+package tracer
+type ExecutionTracer interface { ... }
+
+// internal/graph/builder.go
+import "github.com/hb-chen/opskills/internal/tracer"
+type OpsGraphBuilder struct {
+    tracer tracer.ExecutionTracer
+}
+
+// cmd/serve.go
+import "github.com/hb-chen/opskills/internal/tracer"
+tracer := tracer.NewLogTracer(level)
+builder.SetTracer(tracer) // Direct usage, no adapter needed
+```
+
+## Directory Structure
+
+```
+internal/api/
+├── service.go    # gRPC service implementations (OpsServiceServer)
+└── handler.go    # Special HTTP handlers (SSE, WebSocket, etc.)
+```
+
+**Note**: Do NOT create `http/` or `grpc/` subdirectories. Place implementations directly in `api/`.
+
+## Implementation Guidelines
+
+### Adding a New Standard API Endpoint
+
+1. **Define in proto** (`proto/ops/ops.proto`):
+   ```protobuf
+   rpc MyNewEndpoint(MyRequest) returns (MyResponse) {
+     option (google.api.http) = {
+       post: "/api/v1/my-endpoint"
+       body: "*"
+     };
+   }
+   ```
+
+2. **Implement in gRPC service** (`internal/api/service.go`):
+   ```go
+   func (s *Service) MyNewEndpoint(ctx context.Context, req *ops.MyRequest) (*ops.MyResponse, error) {
+     // Implementation
+   }
+   ```
+
+3. **Register in server** (`internal/server/server.go`):
+   - gRPC service is already registered
+   - Gateway automatically picks up the route from proto
+
+### Adding a New Special Route
+
+1. **Add handler** (`internal/api/handler.go`):
+   ```go
+   func (h *Handler) HandleMySpecialRoute(w http.ResponseWriter, r *http.Request) {
+     // Implementation
+   }
+   ```
+
+2. **Register in server** (`internal/server/server.go`):
+   ```go
+   mainMux.HandleFunc("/api/my-special-route", specialHandler.HandleMySpecialRoute)
+   ```
+
+## Code Generation
+
+After modifying proto files, regenerate code:
+```bash
+make proto
+```
+
+This generates:
+- `proto/ops/ops.pb.go` - Protocol buffer messages
+- `proto/ops/ops_grpc.pb.go` - gRPC service interfaces
+- `proto/ops/ops.pb.gw.go` - Gateway HTTP handlers
+
+## Testing
+
+- **gRPC endpoints**: Test via gRPC client or via HTTP (gateway automatically provides REST API)
+- **Special routes**: Test via HTTP client (curl, Postman, etc.)
+
+## Common Mistakes to Avoid
+
+1. ❌ **Don't manually register proto-defined routes**:
+   ```go
+   // WRONG - This route is already defined in proto
+   v1Group.POST("/tasks", handler.SubmitTask)
+   ```
+
+2. ❌ **Don't create unnecessary subdirectories**:
+   ```
+   // WRONG
+   internal/api/http/handlers.go
+   internal/api/grpc/service.go
+   ```
+
+3. ✅ **Do use proto for all standard APIs**:
+   ```protobuf
+   // CORRECT - Define in proto
+   rpc SubmitTask(SubmitTaskRequest) returns (Response) {
+     option (google.api.http) = {
+       post: "/api/v1/tasks"
+     };
+   }
+   ```
+
+4. ✅ **Do use special handlers only when necessary**:
+   ```go
+   // CORRECT - SSE requires special handling
+   mainMux.HandleFunc("/api/run", specialHandler.HandleRun)
+   ```
+
+## Summary
+
+- **Proto-first**: Define standard APIs in proto → implement as gRPC service → auto-expose via gateway
+- **Special routes only**: Use special HTTP handlers only for routes that cannot use gRPC/gateway
+- **No duplicates**: Never manually register proto-defined routes
+- **Clean structure**: Keep implementations in `internal/api/` without unnecessary subdirectories
+- **No adapters**: Create independent packages for shared interfaces instead of using adapters
+

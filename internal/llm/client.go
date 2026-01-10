@@ -11,12 +11,13 @@ import (
 
 // Client wraps the LLM client
 type Client struct {
-	llm llms.Model
+	llm   llms.Model
+	model string // Model name for API calls
 }
 
 // NewClient creates a new LLM client
-func NewClient(provider, apiKey, url string) (*Client, error) {
-	var model llms.Model
+func NewClient(provider, apiKey, url, modelName string) (*Client, error) {
+	var llmModel llms.Model
 	var err error
 
 	switch provider {
@@ -31,7 +32,7 @@ func NewClient(provider, apiKey, url string) (*Client, error) {
 		if url != "" {
 			opts = append(opts, openai.WithBaseURL(url))
 		}
-		model, err = openai.New(opts...)
+		llmModel, err = openai.New(opts...)
 		if err != nil {
 			return nil, fmt.Errorf("failed to create OpenAI client: %w", err)
 		}
@@ -39,12 +40,17 @@ func NewClient(provider, apiKey, url string) (*Client, error) {
 		return nil, fmt.Errorf("unsupported LLM provider: %s", provider)
 	}
 
-	return &Client{llm: model}, nil
+	return &Client{llm: llmModel, model: modelName}, nil
 }
 
 // Generate generates text from a prompt
 func (c *Client) Generate(ctx context.Context, prompt string) (string, error) {
-	completion, err := c.llm.Call(ctx, prompt)
+	var options []llms.CallOption
+	// Add model name if configured
+	if c.model != "" {
+		options = append(options, llms.WithModel(c.model))
+	}
+	completion, err := c.llm.Call(ctx, prompt, options...)
 	if err != nil {
 		return "", fmt.Errorf("LLM generation failed: %w", err)
 	}
@@ -59,6 +65,11 @@ func (c *Client) GenerateWithTools(ctx context.Context, prompt string, tools []l
 
 	options := []llms.CallOption{
 		llms.WithTools(tools),
+	}
+
+	// Add model name if configured
+	if c.model != "" {
+		options = append(options, llms.WithModel(c.model))
 	}
 
 	response, err := c.llm.GenerateContent(ctx, messages, options...)

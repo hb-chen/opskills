@@ -83,4 +83,3 @@ func (r *ScriptRunner) Run(scriptPath string, args []string, env map[string]stri
 		return "", "", -1, fmt.Errorf("script execution timeout after %v", r.timeout)
 	}
 }
-

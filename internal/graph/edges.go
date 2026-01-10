@@ -4,8 +4,8 @@ import "github.com/hb-chen/opskills/internal/state"
 
 // Edge represents a graph edge
 type Edge struct {
-	From string
-	To   string
+	From      string
+	To        string
 	Condition func(*state.State) bool // Optional condition for conditional routing
 }
 
@@ -26,4 +26,3 @@ func SimpleEdge(from, to string) Edge {
 		Condition: nil,
 	}
 }
-

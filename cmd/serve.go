@@ -10,10 +10,12 @@ import (
 
 	"github.com/hb-chen/opskills/internal/agent"
 	"github.com/hb-chen/opskills/internal/config"
+	"github.com/hb-chen/opskills/internal/graph"
 	"github.com/hb-chen/opskills/internal/llm"
 	"github.com/hb-chen/opskills/internal/server"
 	"github.com/hb-chen/opskills/internal/skill"
 	"github.com/hb-chen/opskills/internal/skill/direct"
+	"github.com/hb-chen/opskills/internal/tracer"
 	"github.com/hb-chen/opskills/pkg/logger"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
@@ -114,7 +116,7 @@ func initPipeline(cfg *config.Config) (*agent.Pipeline, error) {
 		return nil, fmt.Errorf("LLM API key not configured")
 	}
 
-	llmClient, err := llm.NewClient(cfg.LLM.Provider, apiKey, cfg.LLM.URL)
+	llmClient, err := llm.NewClient(cfg.LLM.Provider, apiKey, cfg.LLM.URL, cfg.LLM.Model)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create LLM client: %w", err)
 	}
@@ -124,8 +126,81 @@ func initPipeline(cfg *config.Config) (*agent.Pipeline, error) {
 	executor := direct.NewDirectExecutor(30 * time.Minute) // 30 minutes timeout
 	executorAgent := agent.NewExecutorAgent(executor, registry)
 
-	// Create pipeline
+	// Check if checkpoint or tracing is enabled
+	// Both are independent features:
+	// - Checkpoint: conversation memory, state recovery, rollback
+	// - Tracing: execution observation and reporting
+	useCheckpoint := cfg.Agent.Checkpoint.Enabled
+	useTracing := cfg.Agent.Tracing.Enabled
+
+	// If either checkpoint or tracing is enabled, use the new graph builder
+	if useCheckpoint || useTracing {
+		// Create skill router for graph builder
+		skillConfig := skill.GetDefaultConfig()
+		router := skill.NewRouter(executor, skillConfig, registry)
+
+		// Create graph builder
+		builder := graph.NewOpsGraphBuilder(router, llmClient)
+
+		// Set up tracing if enabled
+		if useTracing {
+			var tracers []tracer.ExecutionTracer
+			if cfg.Agent.Tracing.Log.Level != "" {
+				logTracer := tracer.NewLogTracer(cfg.Agent.Tracing.Log.Level)
+				tracers = append(tracers, logTracer)
+			}
+
+			if len(tracers) > 0 {
+				multiTracer := tracer.NewMultiTracer(tracers...)
+				builder.SetTracer(multiTracer)
+			}
+		}
+
+		// Build graph with checkpoint if enabled
+		if useCheckpoint {
+			checkpointConfig := map[string]interface{}{
+				"path": cfg.Agent.Checkpoint.Path,
+			}
+			checkpointGraph, err := builder.BuildWithCheckpointer(cfg.Agent.Checkpoint.StoreType, checkpointConfig)
+			if err != nil {
+				return nil, fmt.Errorf("failed to build graph with checkpoint: %w", err)
+			}
+
+			// Create pipeline with checkpoint
+			pipeline := agent.NewPipelineWithCheckpoint(checkpointGraph, planner, executorAgent)
+
+			logger.Infof("Pipeline initialized with checkpoint support (store: %s, path: %s)",
+				cfg.Agent.Checkpoint.StoreType,
+				cfg.Agent.Checkpoint.Path)
+			if useTracing {
+				logger.Info("Tracing is also enabled")
+			}
+
+			return pipeline, nil
+		}
+
+		// Tracing enabled but checkpoint disabled: use memory checkpoint store
+		// This allows us to use the checkpoint graph structure with tracer support
+		// without persisting checkpoints to disk
+		checkpointConfig := map[string]interface{}{
+			"path": "", // Not used for memory store
+		}
+		checkpointGraph, err := builder.BuildWithCheckpointer("memory", checkpointConfig)
+		if err != nil {
+			return nil, fmt.Errorf("failed to build graph with memory checkpoint store: %w", err)
+		}
+
+		// Create pipeline with checkpoint (using memory store, no persistence)
+		pipeline := agent.NewPipelineWithCheckpoint(checkpointGraph, planner, executorAgent)
+
+		logger.Info("Pipeline initialized with tracing support (memory checkpoint store, no persistence)")
+
+		return pipeline, nil
+	}
+
+	// Create pipeline without checkpoint or tracing (legacy mode)
 	pipeline := agent.NewPipeline(planner, executorAgent)
+	logger.Info("Pipeline initialized in legacy mode (no checkpoint, no tracing)")
 
 	return pipeline, nil
 }

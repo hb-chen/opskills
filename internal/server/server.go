@@ -14,13 +14,12 @@ import (
 	"github.com/grpc-ecosystem/grpc-gateway/v2/runtime"
 	"google.golang.org/grpc"
 
-	// "google.golang.org/grpc/credentials/insecure" // Will be used when registering services
-
 	"github.com/hb-chen/opskills/internal/agent"
-	httpapi "github.com/hb-chen/opskills/internal/api/http"
+	"github.com/hb-chen/opskills/internal/api"
 	"github.com/hb-chen/opskills/internal/config"
 	"github.com/hb-chen/opskills/pkg/grpc/gateway"
 	"github.com/hb-chen/opskills/pkg/logger"
+	ops "github.com/hb-chen/opskills/proto/ops"
 )
 
 //go:embed web
@@ -28,6 +27,9 @@ var WebFS embed.FS
 
 // Serve starts both HTTP and gRPC servers
 func Serve(ctx context.Context, cfg *config.Config, pipeline *agent.Pipeline) error {
+	// Create gRPC service
+	grpcService := api.NewService(pipeline)
+
 	wg := &sync.WaitGroup{}
 
 	// Start gRPC server
@@ -35,7 +37,7 @@ func Serve(ctx context.Context, cfg *config.Config, pipeline *agent.Pipeline) er
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			if err := runGRPC(ctx, cfg.Server.GRPC.Addr); err != nil {
+			if err := runGRPC(ctx, cfg.Server.GRPC.Addr, grpcService); err != nil {
 				logger.Errorf("gRPC server error: %v", err)
 			}
 		}()
@@ -46,7 +48,7 @@ func Serve(ctx context.Context, cfg *config.Config, pipeline *agent.Pipeline) er
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			if err := runHTTP(ctx, cfg.Server.HTTP.Addr, cfg.Server.GRPC.Addr, pipeline); err != nil {
+			if err := runHTTP(ctx, cfg.Server.HTTP.Addr, pipeline, grpcService); err != nil {
 				logger.Errorf("HTTP server error: %v", err)
 			}
 		}()
@@ -61,7 +63,7 @@ func Serve(ctx context.Context, cfg *config.Config, pipeline *agent.Pipeline) er
 }
 
 // runGRPC starts the gRPC server
-func runGRPC(ctx context.Context, addr string) error {
+func runGRPC(ctx context.Context, addr string, service *api.Service) error {
 	lis, err := net.Listen("tcp", addr)
 	if err != nil {
 		return fmt.Errorf("failed to listen: %w", err)
@@ -69,9 +71,8 @@ func runGRPC(ctx context.Context, addr string) error {
 
 	s := grpc.NewServer()
 
-	// Register services here
-	// For now, this is a placeholder
-	// TODO: Register OpsService
+	// Register OpsService
+	ops.RegisterOpsServiceServer(s, service)
 
 	logger.Infof("gRPC server listening on %s", addr)
 
@@ -89,63 +90,49 @@ func runGRPC(ctx context.Context, addr string) error {
 }
 
 // runHTTP starts the HTTP server with grpc-gateway and additional API routes
-func runHTTP(ctx context.Context, httpAddr, grpcAddr string, pipeline *agent.Pipeline) error {
+// HTTP server uses in-process service registration, not requiring gRPC connection
+func runHTTP(ctx context.Context, httpAddr string, pipeline *agent.Pipeline, grpcService *api.Service) error {
 	// Create gateway with error handler
 	gw := gateway.New(
 		runtime.WithErrorHandler(httpErrorHandler),
 	)
 
-	// Connect to gRPC server
-	// opts := []grpc.DialOption{grpc.WithTransportCredentials(insecure.NewCredentials())}
-
-	// Register gateway handlers
-	// For now, this is a placeholder
-	// TODO: Register OpsService gateway handlers
-	// err := ops.RegisterOpsServiceHandlerFromEndpoint(ctx, gw.Mux(), grpcAddr, opts)
-	// if err != nil {
-	// 	return fmt.Errorf("failed to register gateway: %w", err)
-	// }
-
-	// Create HTTP handlers for Web UI and SSE API
-	logWrapper := &loggerWrapper{}
-	handlers := httpapi.NewHandlers(pipeline, logWrapper)
-
-	// Helper function to convert standard http.HandlerFunc to gateway HandlerFunc
-	toGatewayHandler := func(fn func(http.ResponseWriter, *http.Request)) runtime.HandlerFunc {
-		return func(w http.ResponseWriter, r *http.Request, pathParams map[string]string) {
-			fn(w, r)
-		}
+	// Register gRPC service handlers via gateway (in-process, no gRPC connection needed)
+	// This automatically registers all routes defined in proto (e.g., /api/v1/tasks)
+	if err := ops.RegisterOpsServiceHandlerServer(ctx, gw.Mux(), grpcService); err != nil {
+		return fmt.Errorf("failed to register OpsService gateway handlers: %w", err)
 	}
 
-	// Register non-gRPC API routes using gateway Group
-	apiGroup := gw.Group("/api")
-	apiGroup.POST("/run", toGatewayHandler(handlers.HandleRun))
-	apiGroup.GET("/run", toGatewayHandler(handlers.HandleRun))
+	// Create special route handler for routes that cannot be implemented via gRPC/gateway
+	// (e.g., SSE streaming, WebSocket)
+	specialHandler := api.NewHandler(pipeline)
 
-	// Register /api/v1/tasks
-	v1Group := gw.Group("/api/v1")
-	v1Group.POST("/tasks", toGatewayHandler(handlers.SubmitTask))
-	v1Group.GET("/tasks", toGatewayHandler(handlers.GetTaskStatus))
+	// Create main HTTP mux for routing
+	mainMux := http.NewServeMux()
 
-	// Register /health
-	if err := gw.Mux().HandlePath("GET", "/health", toGatewayHandler(handlers.HealthCheck)); err != nil {
-		return fmt.Errorf("failed to register health endpoint: %w", err)
-	}
+	// Register special routes that bypass gateway (e.g., SSE streaming)
+	mainMux.HandleFunc("/api/run", specialHandler.HandleRun)
+
+	// Register /health endpoint (simple endpoint, doesn't need gRPC)
+	mainMux.HandleFunc("/health", specialHandler.HealthCheck)
+
+	// Mount gateway to root (gateway handles all proto-defined routes)
+	mainMux.Handle("/", gw)
 
 	// Serve static web files from embedded filesystem
-	var baseHandler http.Handler = gw
+	var baseHandler http.Handler = mainMux
 
 	// Create filesystem from embedded web directory
 	webFileSystem, err := fs.Sub(WebFS, "web")
 	if err == nil {
 		fileServer := http.FileServer(http.FS(webFileSystem))
-		// Create a wrapper handler that checks for web files first, then falls back to gateway
+		// Create a wrapper handler that checks for web files first, then falls back to main mux
 		baseHandler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			path := r.URL.Path
 			// Check if it's an API path or static file path
 			if strings.HasPrefix(path, "/api") || strings.HasPrefix(path, "/health") {
-				// API paths go to gateway
-				gw.ServeHTTP(w, r)
+				// API paths go to main mux (which routes to gateway for proto-defined routes or special handlers)
+				mainMux.ServeHTTP(w, r)
 				return
 			}
 			// Static file paths
@@ -249,7 +236,14 @@ func accessLogMiddleware(next http.Handler) http.Handler {
 		start := time.Now()
 
 		// Create a response writer wrapper to capture status code
-		rw := &responseWriter{ResponseWriter: w, statusCode: http.StatusOK}
+		// Preserve Flusher interface for SSE streaming support
+		rw := &responseWriter{
+			ResponseWriter: w,
+			statusCode:     http.StatusOK,
+		}
+		if flusher, ok := w.(http.Flusher); ok {
+			rw.flusher = flusher
+		}
 
 		// Process request
 		next.ServeHTTP(rw, r)
@@ -299,6 +293,7 @@ type responseWriter struct {
 	http.ResponseWriter
 	statusCode   int
 	bytesWritten int64
+	flusher      http.Flusher
 }
 
 func (rw *responseWriter) WriteHeader(code int) {
@@ -310,4 +305,11 @@ func (rw *responseWriter) Write(b []byte) (int, error) {
 	n, err := rw.ResponseWriter.Write(b)
 	rw.bytesWritten += int64(n)
 	return n, err
+}
+
+// Flush implements http.Flusher interface for SSE streaming support
+func (rw *responseWriter) Flush() {
+	if rw.flusher != nil {
+		rw.flusher.Flush()
+	}
 }

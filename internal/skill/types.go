@@ -39,6 +39,3 @@ type ExecutionParams map[string]interface{}
 type Executor interface {
 	Execute(skill *Skill, params ExecutionParams) (*ExecutionResult, error)
 }
-
-
-

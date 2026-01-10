@@ -18,3 +18,19 @@ llm:
 skills:
   dir: "./skills"
 
+agent:
+  # Checkpoint: conversation memory, state recovery, and rollback
+  checkpoint:
+    enabled: true
+    store_type: "file"  # file, memory, redis, postgres
+    path: "./data/checkpoints"
+  
+  # Tracing: execution observation and reporting
+  tracing:
+    enabled: true
+    markdown:
+      enabled: true
+      output_dir: "./data/reports"
+    log:
+      level: "standard"  # minimal, standard, detailed
+

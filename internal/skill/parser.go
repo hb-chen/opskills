@@ -99,4 +99,3 @@ func extractFrontmatter(content string) (string, string, error) {
 
 	return frontmatter, body, nil
 }
-

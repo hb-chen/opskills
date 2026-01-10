@@ -19,11 +19,6 @@ proto:
 # Build the application
 build:
 	@echo "Info: Building opskills-agent..."
-	@mkdir -p pkg/embed
-	@if [ ! -d pkg/embed/web ]; then \
-		cp -r web pkg/embed/web; \
-		echo "Info: Copied web directory to pkg/embed/web for embedding"; \
-	fi
 	@go build -o dist/local/opskills-agent ./cmd/server
 	@mkdir -p dist/local/configs
 	@if [ -f configs/config.yaml ]; then \
@@ -39,7 +34,7 @@ build:
 
 # Run the application
 run:
-	@cd dist/local && ./opskills-agent serve --config ./configs/config.yaml
+	@cd dist/local && ./opskills-agent serve -e --config ./configs/config.yaml
 
 # Run tests
 test:

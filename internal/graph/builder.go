@@ -3,10 +3,12 @@ package graph
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/hb-chen/opskills/internal/llm"
 	"github.com/hb-chen/opskills/internal/skill"
 	"github.com/hb-chen/opskills/internal/state"
+	"github.com/hb-chen/opskills/internal/tracer"
 	"github.com/smallnest/langgraphgo/graph"
 	"github.com/smallnest/langgraphgo/store"
 	"github.com/smallnest/langgraphgo/store/file"
@@ -20,6 +22,7 @@ type LangGraphNodeFunc func(ctx context.Context, state map[string]any) (map[stri
 type OpsGraphBuilder struct {
 	skillRouter *skill.Router
 	llmClient   *llm.Client
+	tracer      tracer.ExecutionTracer // Optional tracer for execution tracking
 }
 
 // NewOpsGraphBuilder creates a new graph builder
@@ -28,6 +31,11 @@ func NewOpsGraphBuilder(skillRouter *skill.Router, llmClient *llm.Client) *OpsGr
 		skillRouter: skillRouter,
 		llmClient:   llmClient,
 	}
+}
+
+// SetTracer sets the tracer for the graph builder
+func (b *OpsGraphBuilder) SetTracer(t tracer.ExecutionTracer) {
+	b.tracer = t
 }
 
 // Build creates a new StateGraph using langgraphgo
@@ -55,15 +63,42 @@ func (b *OpsGraphBuilder) Build() (*graph.StateGraph[map[string]any], error) {
 	return g, nil
 }
 
-// BuildWithCheckpointer creates a graph with checkpointer support
-func (b *OpsGraphBuilder) BuildWithCheckpointer(storeType string, config map[string]interface{}) (*graph.StateGraph[map[string]any], error) {
-	g, err := b.Build()
-	if err != nil {
-		return nil, err
-	}
+// BuildCheckpointable creates a new CheckpointableStateGraph using langgraphgo
+func (b *OpsGraphBuilder) BuildCheckpointable(config graph.CheckpointConfig) (*graph.CheckpointableStateGraph[map[string]any], error) {
+	// Create checkpointable state graph
+	g := graph.NewCheckpointableStateGraphWithConfig[map[string]any](config)
 
+	// Set up schema with reducers
+	schema := graph.NewMapSchema()
+	schema.RegisterReducer("messages", graph.AddMessages)
+	schema.RegisterReducer("results", graph.AppendReducer)
+	g.SetSchema(schema)
+
+	// Add nodes
+	g.AddNode("planning", "Planning node: generates execution plan", b.createPlanningNode())
+	g.AddNode("execution", "Execution node: executes plan steps", b.createExecutionNode())
+	g.AddNode("validation", "Validation node: validates execution results", b.createValidationNode())
+
+	// Define edges
+	g.AddEdge("planning", "execution")
+	g.AddEdge("execution", "validation")
+	g.AddEdge("validation", graph.END)
+	g.SetEntryPoint("planning")
+
+	return g, nil
+}
+
+// CheckpointableGraph wraps a checkpointable graph with its checkpoint store
+type CheckpointableGraph struct {
+	Graph           *graph.CheckpointableStateGraph[map[string]any]
+	CheckpointStore store.CheckpointStore
+}
+
+// BuildWithCheckpointer creates a checkpointable graph with checkpointer support
+func (b *OpsGraphBuilder) BuildWithCheckpointer(storeType string, config map[string]interface{}) (*CheckpointableGraph, error) {
 	// Create checkpointer based on store type
 	var checkpointStore store.CheckpointStore
+	var err error
 	switch storeType {
 	case "file":
 		path, _ := config["path"].(string)
@@ -74,6 +109,8 @@ func (b *OpsGraphBuilder) BuildWithCheckpointer(storeType string, config map[str
 		if err != nil {
 			return nil, fmt.Errorf("failed to create file checkpoint store: %w", err)
 		}
+	case "memory":
+		checkpointStore = graph.NewMemoryCheckpointStore()
 	case "redis":
 		// TODO: Implement Redis checkpointer when needed
 		return nil, fmt.Errorf("Redis checkpointer not yet implemented")
@@ -84,21 +121,46 @@ func (b *OpsGraphBuilder) BuildWithCheckpointer(storeType string, config map[str
 		return nil, fmt.Errorf("unknown store type: %s", storeType)
 	}
 
-	// Note: The checkpoint store is created but not yet integrated
-	// To use it, convert g to CheckpointableStateGraph and use CompileCheckpointable
-	_ = checkpointStore // Use checkpointStore when implementing full checkpoint support
+	// Create checkpoint config
+	checkpointConfig := graph.CheckpointConfig{
+		Store:          checkpointStore,
+		AutoSave:       true,
+		SaveInterval:   30 * time.Second,
+		MaxCheckpoints: 100, // Keep up to 100 checkpoints per execution
+	}
 
-	return g, nil
+	// Build checkpointable graph
+	g, err := b.BuildCheckpointable(checkpointConfig)
+	if err != nil {
+		return nil, err
+	}
+
+	return &CheckpointableGraph{
+		Graph:           g,
+		CheckpointStore: checkpointStore,
+	}, nil
 }
 
 // createPlanningNode creates the planning node function
 func (b *OpsGraphBuilder) createPlanningNode() LangGraphNodeFunc {
 	return func(ctx context.Context, stateMap map[string]any) (map[string]any, error) {
+		startTime := time.Now()
+		nodeName := "planning"
+		taskID := getString(stateMap, "task_id")
+
+		// Trace node start
+		if b.tracer != nil {
+			b.tracer.TraceNodeStart(ctx, nodeName, taskID)
+		}
+
 		// Convert map to AgentState for easier manipulation
 		agentState := b.mapToAgentState(stateMap)
 
 		// If plan already exists, skip
 		if agentState.Plan != nil {
+			if b.tracer != nil {
+				b.tracer.TraceNodeEnd(ctx, nodeName, taskID, time.Since(startTime))
+			}
 			return stateMap, nil
 		}
 
@@ -125,15 +187,39 @@ func (b *OpsGraphBuilder) createPlanningNode() LangGraphNodeFunc {
 		}
 
 		if query == "" {
-			return stateMap, fmt.Errorf("no query provided")
+			err := fmt.Errorf("no query provided")
+			if b.tracer != nil {
+				b.tracer.TraceError(ctx, taskID, nodeName, err)
+				b.tracer.TraceNodeEnd(ctx, nodeName, taskID, time.Since(startTime))
+			}
+			return stateMap, err
 		}
 
+		// Trace LLM request (if using LLM for planning)
+		if b.tracer != nil {
+			// Note: Actual prompt would be passed here when using LLM
+			b.tracer.TraceLLMRequest(ctx, taskID, fmt.Sprintf("Planning query: %s", query))
+		}
+
+		llmStartTime := time.Now()
 		// Use planning agent to generate plan
 		plan, err := b.generatePlan(ctx, query)
+		llmDuration := time.Since(llmStartTime)
+
 		if err != nil {
 			agentState.PlanError = err.Error()
 			agentState.Error = fmt.Sprintf("planning failed: %v", err)
+			if b.tracer != nil {
+				b.tracer.TraceError(ctx, taskID, nodeName, err)
+				b.tracer.TraceNodeEnd(ctx, nodeName, taskID, time.Since(startTime))
+			}
 			return b.agentStateToMap(agentState), err
+		}
+
+		// Trace LLM response
+		if b.tracer != nil {
+			planSummary := fmt.Sprintf("Generated plan with %d steps", len(plan.Steps))
+			b.tracer.TraceLLMResponse(ctx, taskID, planSummary, llmDuration)
 		}
 
 		agentState.Plan = plan
@@ -152,6 +238,11 @@ func (b *OpsGraphBuilder) createPlanningNode() LangGraphNodeFunc {
 			}
 		}
 
+		// Trace node end
+		if b.tracer != nil {
+			b.tracer.TraceNodeEnd(ctx, nodeName, taskID, time.Since(startTime))
+		}
+
 		return b.agentStateToMap(agentState), nil
 	}
 }
@@ -159,11 +250,25 @@ func (b *OpsGraphBuilder) createPlanningNode() LangGraphNodeFunc {
 // createExecutionNode creates the execution node function
 func (b *OpsGraphBuilder) createExecutionNode() LangGraphNodeFunc {
 	return func(ctx context.Context, stateMap map[string]any) (map[string]any, error) {
+		startTime := time.Now()
+		nodeName := "execution"
+		taskID := getString(stateMap, "task_id")
+
+		// Trace node start
+		if b.tracer != nil {
+			b.tracer.TraceNodeStart(ctx, nodeName, taskID)
+		}
+
 		// Convert map to AgentState
 		agentState := b.mapToAgentState(stateMap)
 
 		if agentState.Plan == nil || len(agentState.Steps) == 0 {
-			return stateMap, fmt.Errorf("no plan or steps to execute")
+			err := fmt.Errorf("no plan or steps to execute")
+			if b.tracer != nil {
+				b.tracer.TraceError(ctx, taskID, nodeName, err)
+				b.tracer.TraceNodeEnd(ctx, nodeName, taskID, time.Since(startTime))
+			}
+			return stateMap, err
 		}
 
 		// Initialize results if needed
@@ -178,8 +283,14 @@ func (b *OpsGraphBuilder) createExecutionNode() LangGraphNodeFunc {
 				continue
 			}
 
+			stepStartTime := time.Now()
 			step.Status = "running"
 			agentState.CurrentStep = i
+
+			// Trace step start
+			if b.tracer != nil {
+				b.tracer.TraceStepStart(ctx, taskID, step)
+			}
 
 			// Execute the step using skill router
 			execParams := make(skill.ExecutionParams)
@@ -188,14 +299,25 @@ func (b *OpsGraphBuilder) createExecutionNode() LangGraphNodeFunc {
 			}
 
 			result, err := b.skillRouter.Execute(step.SkillName, execParams)
+			stepDuration := time.Since(stepStartTime)
+
 			if err != nil {
 				step.Status = "failed"
-				agentState.Results = append(agentState.Results, &state.StepResult{
-					StepID:  step.ID,
-					Success: false,
-					Error:   err.Error(),
-				})
+				stepResult := &state.StepResult{
+					StepID:   step.ID,
+					Success:  false,
+					Error:    err.Error(),
+					Duration: stepDuration.String(),
+				}
+				agentState.Results = append(agentState.Results, stepResult)
 				agentState.Error = fmt.Sprintf("step %d failed: %v", step.ID, err)
+
+				// Trace step end with error
+				if b.tracer != nil {
+					b.tracer.TraceStepEnd(ctx, taskID, step, stepResult, stepDuration)
+					b.tracer.TraceError(ctx, taskID, nodeName, err)
+					b.tracer.TraceNodeEnd(ctx, nodeName, taskID, time.Since(startTime))
+				}
 				return b.agentStateToMap(agentState), err
 			}
 
@@ -206,12 +328,24 @@ func (b *OpsGraphBuilder) createExecutionNode() LangGraphNodeFunc {
 				output = result.Output
 				errorMsg = result.Error
 			}
-			agentState.Results = append(agentState.Results, &state.StepResult{
-				StepID:  step.ID,
-				Success: result != nil && result.Success,
-				Output:  output,
-				Error:   errorMsg,
-			})
+			stepResult := &state.StepResult{
+				StepID:   step.ID,
+				Success:  result != nil && result.Success,
+				Output:   output,
+				Error:    errorMsg,
+				Duration: stepDuration.String(),
+			}
+			agentState.Results = append(agentState.Results, stepResult)
+
+			// Trace step end
+			if b.tracer != nil {
+				b.tracer.TraceStepEnd(ctx, taskID, step, stepResult, stepDuration)
+			}
+		}
+
+		// Trace node end
+		if b.tracer != nil {
+			b.tracer.TraceNodeEnd(ctx, nodeName, taskID, time.Since(startTime))
 		}
 
 		return b.agentStateToMap(agentState), nil
@@ -221,6 +355,15 @@ func (b *OpsGraphBuilder) createExecutionNode() LangGraphNodeFunc {
 // createValidationNode creates the validation node function
 func (b *OpsGraphBuilder) createValidationNode() LangGraphNodeFunc {
 	return func(ctx context.Context, stateMap map[string]any) (map[string]any, error) {
+		startTime := time.Now()
+		nodeName := "validation"
+		taskID := getString(stateMap, "task_id")
+
+		// Trace node start
+		if b.tracer != nil {
+			b.tracer.TraceNodeStart(ctx, nodeName, taskID)
+		}
+
 		// Convert map to AgentState
 		agentState := b.mapToAgentState(stateMap)
 
@@ -239,6 +382,11 @@ func (b *OpsGraphBuilder) createValidationNode() LangGraphNodeFunc {
 				Success: true,
 				Summary: fmt.Sprintf("Completed %d steps successfully", len(agentState.Steps)),
 			}
+		}
+
+		// Trace node end
+		if b.tracer != nil {
+			b.tracer.TraceNodeEnd(ctx, nodeName, taskID, time.Since(startTime))
 		}
 
 		return b.agentStateToMap(agentState), nil
@@ -407,10 +555,11 @@ func (b *OpsGraphBuilder) mapToStepResults(resultsSlice []any) []*state.StepResu
 	for i, resultVal := range resultsSlice {
 		if resultMap, ok := resultVal.(map[string]any); ok {
 			results[i] = &state.StepResult{
-				StepID:  getInt(resultMap, "step_id"),
-				Success: getBool(resultMap, "success"),
-				Output:  getString(resultMap, "output"),
-				Error:   getString(resultMap, "error"),
+				StepID:   getInt(resultMap, "step_id"),
+				Success:  getBool(resultMap, "success"),
+				Output:   getString(resultMap, "output"),
+				Error:    getString(resultMap, "error"),
+				Duration: getString(resultMap, "duration"),
 			}
 		}
 	}
@@ -488,10 +637,11 @@ func (b *OpsGraphBuilder) stepResultsToMap(results []*state.StepResult) []any {
 	result := make([]any, len(results))
 	for i, res := range results {
 		result[i] = map[string]any{
-			"step_id": res.StepID,
-			"success": res.Success,
-			"output":  res.Output,
-			"error":   res.Error,
+			"step_id":  res.StepID,
+			"success":  res.Success,
+			"output":   res.Output,
+			"error":    res.Error,
+			"duration": res.Duration,
 		}
 	}
 	return result

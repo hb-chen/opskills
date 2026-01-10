@@ -143,6 +143,3 @@ func (s *Server) Serve(ctx context.Context, reader io.Reader, writer io.Writer) 
 		}
 	}
 }
-
-
-
