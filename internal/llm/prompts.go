@@ -61,6 +61,32 @@ Please analyze the error and suggest:
 3. Whether to retry or skip this step
 
 Response:`
+
+	// ValidationPromptTemplate is the template for result validation
+	ValidationPromptTemplate = `You are validating the execution results of an Ops task.
+
+Original Query: {{.Query}}
+
+Execution Plan:
+{{.PlanSummary}}
+
+Execution Results:
+{{.ResultsSummary}}
+
+Please evaluate:
+1. Do the results match the original query requirements?
+2. Are there any issues or errors that need attention?
+3. Should we replan and retry with a different approach?
+
+Respond in JSON format:
+{
+  "success": true/false,
+  "reason": "detailed explanation",
+  "should_replan": true/false,
+  "replan_reason": "why replanning is needed (if should_replan is true)"
+}
+
+Response:`
 )
 
 // PlanningPromptData holds data for planning prompt
@@ -87,6 +113,13 @@ type ExecutionPromptData struct {
 type ErrorHandlingPromptData struct {
 	StepDescription string
 	Error           string
+}
+
+// ValidationPromptData holds data for validation prompt
+type ValidationPromptData struct {
+	Query         string
+	PlanSummary   string
+	ResultsSummary string
 }
 
 // FormatPlanningPrompt formats the planning prompt with data
@@ -120,6 +153,15 @@ func FormatErrorHandlingPrompt(data ErrorHandlingPromptData) string {
 	prompt := ErrorHandlingPromptTemplate
 	prompt = replaceAll(prompt, "{{.StepDescription}}", data.StepDescription)
 	prompt = replaceAll(prompt, "{{.Error}}", data.Error)
+	return prompt
+}
+
+// FormatValidationPrompt formats the validation prompt with data
+func FormatValidationPrompt(data ValidationPromptData) string {
+	prompt := ValidationPromptTemplate
+	prompt = replaceAll(prompt, "{{.Query}}", data.Query)
+	prompt = replaceAll(prompt, "{{.PlanSummary}}", data.PlanSummary)
+	prompt = replaceAll(prompt, "{{.ResultsSummary}}", data.ResultsSummary)
 	return prompt
 }
 

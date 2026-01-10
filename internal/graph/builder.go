@@ -2,7 +2,10 @@ package graph
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"regexp"
+	"strings"
 	"time"
 
 	"github.com/hb-chen/opskills/internal/llm"
@@ -57,6 +60,8 @@ func (b *OpsGraphBuilder) Build() (*graph.StateGraph[map[string]any], error) {
 	// Define edges
 	g.AddEdge("planning", "execution")
 	g.AddEdge("execution", "validation")
+	// Validation node always routes to END
+	// Replanning is handled by Pipeline layer checking replan_needed flag
 	g.AddEdge("validation", graph.END)
 	g.SetEntryPoint("planning")
 
@@ -82,6 +87,8 @@ func (b *OpsGraphBuilder) BuildCheckpointable(config graph.CheckpointConfig) (*g
 	// Define edges
 	g.AddEdge("planning", "execution")
 	g.AddEdge("execution", "validation")
+	// Validation node always routes to END
+	// Replanning is handled by Pipeline layer checking replan_needed flag
 	g.AddEdge("validation", graph.END)
 	g.SetEntryPoint("planning")
 
@@ -156,12 +163,22 @@ func (b *OpsGraphBuilder) createPlanningNode() LangGraphNodeFunc {
 		// Convert map to AgentState for easier manipulation
 		agentState := b.mapToAgentState(stateMap)
 
-		// If plan already exists, skip
+		// Check if replanning is needed
+		if agentState.ReplanNeeded {
+			// Clear existing plan to force regeneration
+			agentState.Plan = nil
+			agentState.Steps = nil
+			agentState.Results = nil
+			agentState.CurrentStep = 0
+			agentState.ReplanNeeded = false // Reset flag after handling
+		}
+
+		// If plan already exists and no replan needed, skip
 		if agentState.Plan != nil {
 			if b.tracer != nil {
 				b.tracer.TraceNodeEnd(ctx, nodeName, taskID, time.Since(startTime))
 			}
-			return stateMap, nil
+			return b.agentStateToMap(agentState), nil
 		}
 
 		// Get query from messages or state
@@ -316,9 +333,12 @@ func (b *OpsGraphBuilder) createExecutionNode() LangGraphNodeFunc {
 				if b.tracer != nil {
 					b.tracer.TraceStepEnd(ctx, taskID, step, stepResult, stepDuration)
 					b.tracer.TraceError(ctx, taskID, nodeName, err)
-					b.tracer.TraceNodeEnd(ctx, nodeName, taskID, time.Since(startTime))
 				}
-				return b.agentStateToMap(agentState), err
+
+				// Don't return error, continue to validation node
+				// Validation node will detect the failure and trigger replanning
+				// Stop executing remaining steps and proceed to validation
+				break
 			}
 
 			step.Status = "completed"
@@ -352,7 +372,7 @@ func (b *OpsGraphBuilder) createExecutionNode() LangGraphNodeFunc {
 	}
 }
 
-// createValidationNode creates the validation node function
+// createValidationNode creates the validation node function with enhanced validation and replanning support
 func (b *OpsGraphBuilder) createValidationNode() LangGraphNodeFunc {
 	return func(ctx context.Context, stateMap map[string]any) (map[string]any, error) {
 		startTime := time.Now()
@@ -367,20 +387,91 @@ func (b *OpsGraphBuilder) createValidationNode() LangGraphNodeFunc {
 		// Convert map to AgentState
 		agentState := b.mapToAgentState(stateMap)
 
-		// Check if all steps are completed
+		// 1. Check if all steps are completed
 		allCompleted := true
+		hasFailures := false
 		for _, step := range agentState.Steps {
 			if step.Status != "completed" {
 				allCompleted = false
-				break
+			}
+			if step.Status == "failed" {
+				hasFailures = true
 			}
 		}
 
+		// 2. Validate execution results using LLM (if all steps completed)
+		var validationResult *ValidationResult
 		if allCompleted && len(agentState.Steps) > 0 {
-			// Generate final result
+			validationResult = b.validateResults(ctx, agentState)
+		} else {
+			// If not all completed, validation fails
+			validationResult = &ValidationResult{
+				Success: false,
+				Reason:  "Not all steps completed",
+			}
+		}
+
+		// 3. Determine if replanning is needed
+		needsReplan := false
+		replanReason := ""
+		maxReplans := 3 // Maximum number of replan attempts
+
+		if hasFailures {
+			needsReplan = true
+			replanReason = "Some steps failed during execution"
+		} else if !validationResult.Success {
+			needsReplan = validationResult.ShouldReplan
+			if needsReplan {
+				replanReason = validationResult.ReplanReason
+				if replanReason == "" {
+					replanReason = validationResult.Reason
+				}
+			}
+		}
+
+		// 4. Check replan count limit
+		replanCount := agentState.ReplanCount
+		if needsReplan && replanCount < maxReplans {
+			// Set replanning flags
+			agentState.ReplanNeeded = true
+			agentState.ReplanReason = replanReason
+			agentState.ReplanCount = replanCount + 1
+
+			// Clear current plan and steps to allow replanning
+			agentState.Plan = nil
+			agentState.Steps = nil
+			agentState.Results = nil
+			agentState.CurrentStep = 0
+			agentState.Error = "" // Clear previous errors
+
+			// Trace replanning decision
+			if b.tracer != nil {
+				b.tracer.TraceNodeEnd(ctx, nodeName, taskID, time.Since(startTime))
+			}
+
+			// Return state with replan_needed flag set
+			// The graph will route back to planning node
+			return b.agentStateToMap(agentState), nil
+		}
+
+		// 5. Generate final result
+		if allCompleted && validationResult.Success {
 			agentState.FinalResult = &state.FinalResult{
 				Success: true,
 				Summary: fmt.Sprintf("Completed %d steps successfully", len(agentState.Steps)),
+			}
+		} else {
+			errorMsg := validationResult.Reason
+			if hasFailures {
+				errorMsg = "Some steps failed during execution"
+			}
+			if replanCount >= maxReplans {
+				errorMsg = fmt.Sprintf("Validation failed after %d replan attempts: %s", replanCount, errorMsg)
+			}
+			agentState.FinalResult = &state.FinalResult{
+				Success: false,
+				Error:   errorMsg,
+				Summary: fmt.Sprintf("Validation failed after %d replan attempts", replanCount),
 			}
 		}
 
@@ -392,6 +483,165 @@ func (b *OpsGraphBuilder) createValidationNode() LangGraphNodeFunc {
 		return b.agentStateToMap(agentState), nil
 	}
 }
+
+// ValidationResult represents the result of validation
+type ValidationResult struct {
+	Success      bool
+	Reason         string
+	ShouldReplan   bool
+	ReplanReason   string
+}
+
+// validateResults validates execution results using LLM
+func (b *OpsGraphBuilder) validateResults(ctx context.Context, agentState *state.AgentState) *ValidationResult {
+	// Build plan summary
+	planSummary := ""
+	if agentState.Plan != nil {
+		for i, step := range agentState.Plan.Steps {
+			planSummary += fmt.Sprintf("Step %d: %s - %s\n", i+1, step.SkillName, step.Description)
+		}
+	}
+
+	// Build results summary
+	resultsSummary := ""
+	for i, result := range agentState.Results {
+		status := "✅ Success"
+		if !result.Success {
+			status = "❌ Failed"
+		}
+		resultsSummary += fmt.Sprintf("Step %d: %s\n", i+1, status)
+		if result.Output != "" {
+			resultsSummary += fmt.Sprintf("  Output: %s\n", truncateString(result.Output, 200))
+		}
+		if result.Error != "" {
+			resultsSummary += fmt.Sprintf("  Error: %s\n", result.Error)
+		}
+	}
+
+	// Build validation prompt
+	promptData := llm.ValidationPromptData{
+		Query:          agentState.Query,
+		PlanSummary:    planSummary,
+		ResultsSummary: resultsSummary,
+	}
+	prompt := llm.FormatValidationPrompt(promptData)
+
+	// Use LLM to evaluate results
+	response, err := b.llmClient.Generate(ctx, prompt)
+	if err != nil {
+		return &ValidationResult{
+			Success:    false,
+			Reason:     fmt.Sprintf("Validation failed: %v", err),
+			ShouldReplan: false,
+		}
+	}
+
+	// Parse LLM response
+	return b.parseValidationResponse(response)
+}
+
+// parseValidationResponse parses the LLM validation response
+func (b *OpsGraphBuilder) parseValidationResponse(response string) *ValidationResult {
+	// Try to extract JSON from response
+	startIdx := -1
+	endIdx := -1
+	braceCount := 0
+
+	for i, char := range response {
+		if char == '{' {
+			if startIdx == -1 {
+				startIdx = i
+			}
+			braceCount++
+		} else if char == '}' {
+			braceCount--
+			if braceCount == 0 && startIdx != -1 {
+				endIdx = i + 1
+				break
+			}
+		}
+	}
+
+	if startIdx == -1 || endIdx == -1 {
+		// If no JSON found, assume validation passed
+		return &ValidationResult{
+			Success:      true,
+			Reason:       "Validation completed (no detailed response)",
+			ShouldReplan: false,
+		}
+	}
+
+	jsonStr := response[startIdx:endIdx]
+
+	// Parse JSON using proper decoder
+	var validationData struct {
+		Success      bool   `json:"success"`
+		Reason       string `json:"reason"`
+		ShouldReplan bool   `json:"should_replan"`
+		ReplanReason string `json:"replan_reason"`
+	}
+
+	if err := json.Unmarshal([]byte(jsonStr), &validationData); err != nil {
+		// Fallback to simple heuristic if JSON parsing fails
+		success := true
+		shouldReplan := false
+		reason := ""
+		replanReason := ""
+
+		// Check for success field
+		if strings.Contains(jsonStr, `"success":false`) || strings.Contains(jsonStr, `"success": false`) {
+			success = false
+		}
+
+		// Check for should_replan field
+		if strings.Contains(jsonStr, `"should_replan":true`) || strings.Contains(jsonStr, `"should_replan": true`) {
+			shouldReplan = true
+		}
+
+		// Extract reason
+		if reasonMatch := extractJSONField(jsonStr, "reason"); reasonMatch != "" {
+			reason = reasonMatch
+		}
+
+		if replanReasonMatch := extractJSONField(jsonStr, "replan_reason"); replanReasonMatch != "" {
+			replanReason = replanReasonMatch
+		}
+
+		return &ValidationResult{
+			Success:      success,
+			Reason:       reason,
+			ShouldReplan: shouldReplan,
+			ReplanReason: replanReason,
+		}
+	}
+
+	return &ValidationResult{
+		Success:      validationData.Success,
+		Reason:       validationData.Reason,
+		ShouldReplan: validationData.ShouldReplan,
+		ReplanReason: validationData.ReplanReason,
+	}
+}
+
+// Helper function to extract JSON field value (simplified)
+func extractJSONField(jsonStr, fieldName string) string {
+	pattern := fmt.Sprintf(`"%s"\s*:\s*"([^"]*)"`, fieldName)
+	re := regexp.MustCompile(pattern)
+	matches := re.FindStringSubmatch(jsonStr)
+	if len(matches) > 1 {
+		return matches[1]
+	}
+	return ""
+}
+
+// truncateString truncates a string to max length
+func truncateString(s string, maxLen int) string {
+	if len(s) <= maxLen {
+		return s
+	}
+	return s[:maxLen] + "..."
+}
+
 
 // generatePlan generates a plan using LLM (temporary, will be replaced with prebuilt agent)
 func (b *OpsGraphBuilder) generatePlan(ctx context.Context, query string) (*state.Plan, error) {
@@ -413,13 +663,16 @@ func (b *OpsGraphBuilder) generatePlan(ctx context.Context, query string) (*stat
 // mapToAgentState converts a map[string]any to AgentState
 func (b *OpsGraphBuilder) mapToAgentState(stateMap map[string]any) *state.AgentState {
 	agentState := &state.AgentState{
-		Query:       getString(stateMap, "query"),
-		TaskID:      getString(stateMap, "task_id"),
-		StartedAt:   getString(stateMap, "started_at"),
-		UpdatedAt:   getString(stateMap, "updated_at"),
-		Error:       getString(stateMap, "error"),
-		PlanError:   getString(stateMap, "plan_error"),
-		CurrentStep: getInt(stateMap, "current_step"),
+		Query:        getString(stateMap, "query"),
+		TaskID:       getString(stateMap, "task_id"),
+		StartedAt:    getString(stateMap, "started_at"),
+		UpdatedAt:    getString(stateMap, "updated_at"),
+		Error:        getString(stateMap, "error"),
+		PlanError:    getString(stateMap, "plan_error"),
+		CurrentStep:  getInt(stateMap, "current_step"),
+		ReplanNeeded: getBool(stateMap, "replan_needed"),
+		ReplanReason: getString(stateMap, "replan_reason"),
+		ReplanCount:  getInt(stateMap, "replan_count"),
 	}
 
 	// Convert plan
@@ -467,6 +720,9 @@ func (b *OpsGraphBuilder) agentStateToMap(agentState *state.AgentState) map[stri
 	stateMap["error"] = agentState.Error
 	stateMap["plan_error"] = agentState.PlanError
 	stateMap["current_step"] = agentState.CurrentStep
+	stateMap["replan_needed"] = agentState.ReplanNeeded
+	stateMap["replan_reason"] = agentState.ReplanReason
+	stateMap["replan_count"] = agentState.ReplanCount
 
 	if agentState.Plan != nil {
 		stateMap["plan"] = b.planToMap(agentState.Plan)
@@ -509,6 +765,15 @@ func getInt(m map[string]any, key string) int {
 		}
 	}
 	return 0
+}
+
+func getBool(m map[string]any, key string) bool {
+	if val, ok := m[key]; ok {
+		if b, ok := val.(bool); ok {
+			return b
+		}
+	}
+	return false
 }
 
 // Conversion helpers (simplified - full implementation would handle all fields)
@@ -573,15 +838,6 @@ func (b *OpsGraphBuilder) mapToFinalResult(finalMap map[string]any) *state.Final
 		Error:   getString(finalMap, "error"),
 		Summary: getString(finalMap, "summary"),
 	}
-}
-
-func getBool(m map[string]any, key string) bool {
-	if val, ok := m[key]; ok {
-		if b, ok := val.(bool); ok {
-			return b
-		}
-	}
-	return false
 }
 
 func getMap(m map[string]any, key string) map[string]interface{} {

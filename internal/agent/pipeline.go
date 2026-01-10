@@ -98,21 +98,64 @@ func (p *Pipeline) executeWithCheckpoint(ctx context.Context, query string, task
 		},
 	}
 
-	// Execute graph with checkpoint support
+	// Execute graph with checkpoint support and replanning loop
 	// Checkpoint will automatically save state at each node
-	resultMap, err := runnable.InvokeWithConfig(ctx, initialStateMap, config)
-	if err != nil {
-		// Convert error state
-		finalState := p.mapToState(resultMap, taskID)
-		finalState.Error = err.Error()
-		finalState.UpdatedAt = time.Now().Format(time.RFC3339)
-		return finalState, err
-	}
+	maxReplans := 3
+	replanCount := 0
+	currentState := initialStateMap
 
-	// Convert result map back to State
-	finalState := p.mapToState(resultMap, taskID)
-	finalState.UpdatedAt = time.Now().Format(time.RFC3339)
-	return finalState, nil
+	for {
+		resultMap, err := runnable.InvokeWithConfig(ctx, currentState, config)
+		if err != nil {
+			// Convert error state
+			finalState := p.mapToState(resultMap, taskID)
+			finalState.Error = err.Error()
+			finalState.UpdatedAt = time.Now().Format(time.RFC3339)
+			return finalState, err
+		}
+
+		// Check if replanning is needed
+		replanNeeded := false
+		if val, ok := resultMap["replan_needed"]; ok {
+			if b, ok := val.(bool); ok {
+				replanNeeded = b
+			}
+		}
+
+		// Check if we have a final result (validation passed)
+		// If we have a successful final result, we can exit the loop
+		if val, ok := resultMap["final_result"]; ok {
+			if finalMap, ok := val.(map[string]any); ok {
+				if success, ok := finalMap["success"].(bool); ok && success {
+					// Validation passed, exit loop
+					finalState := p.mapToState(resultMap, taskID)
+					finalState.UpdatedAt = time.Now().Format(time.RFC3339)
+					return finalState, nil
+				}
+			}
+		}
+
+		// If replanning is needed and we haven't exceeded max replans
+		if replanNeeded && replanCount < maxReplans {
+			replanCount++
+			// Update replan count in state
+			resultMap["replan_count"] = replanCount
+			// Clear plan to force regeneration
+			delete(resultMap, "plan")
+			delete(resultMap, "steps")
+			delete(resultMap, "results")
+			resultMap["current_step"] = 0
+			resultMap["replan_needed"] = false // Reset flag
+			// Continue loop with updated state
+			currentState = resultMap
+			continue
+		}
+
+		// Convert result map back to State
+		finalState := p.mapToState(resultMap, taskID)
+		finalState.UpdatedAt = time.Now().Format(time.RFC3339)
+		return finalState, nil
+	}
 }
 
 // mapToState converts a map[string]any to State (simplified conversion)

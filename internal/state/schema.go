@@ -29,6 +29,11 @@ type AgentState struct {
 	TaskID    string `graph:"task_id" json:"task_id"`
 	StartedAt string `graph:"started_at" json:"started_at,omitempty"`
 	UpdatedAt string `graph:"updated_at" json:"updated_at,omitempty"`
+
+	// Replanning support
+	ReplanNeeded bool   `graph:"replan_needed" json:"replan_needed,omitempty"`
+	ReplanReason  string `graph:"replan_reason" json:"replan_reason,omitempty"`
+	ReplanCount   int    `graph:"replan_count" json:"replan_count,omitempty"`
 }
 
 // State represents the agent execution state (legacy, kept for compatibility)

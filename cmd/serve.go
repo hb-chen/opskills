@@ -104,7 +104,9 @@ func initPipeline(cfg *config.Config) (*agent.Pipeline, error) {
 	// Create registry
 	registry := skill.NewRegistry()
 	for _, s := range skills {
-		registry.Register(s)
+		if err := registry.Register(s); err != nil {
+			return nil, fmt.Errorf("failed to register skill %s: %w", s.Name, err)
+		}
 	}
 
 	// Create LLM client
